@@ -115,6 +115,11 @@ func NewComponent() component.ControlPlaneComponent {
 			component.WithAdaptFunction(kms.AdaptAzureSecretProvider),
 			component.WithPredicate(enableAzureKMSSecretProvider),
 		).
+		WithManifestAdapter(
+			"named-certificate.yaml",
+			component.WithAdaptFunction(adaptNamedCertificate),
+			component.WithPredicate(enableNamedCertificate),
+		).
 		Build()
 }
 
