@@ -55,6 +55,8 @@ import (
 	prometheusoperatorv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1beta1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
+
+	certmanagerv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 )
 
 var (
@@ -153,5 +155,6 @@ func init() {
 			&karpenterv1.NodePoolList{},
 		)
 		_ = hyperkarpenterv1.AddToScheme(scheme)
+		_ = certmanagerv1.AddToScheme(scheme)
 	}
 }
