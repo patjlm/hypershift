@@ -331,6 +331,19 @@ func (o ExternalDNSDeployment) Build() *appsv1.Deployment {
 			"--azure-config-file=/etc/provider/credentials",
 		)
 	case GCPExternalDNSProvider:
+		// GCP-386: Add DNSEndpoint CRD source for ingress zone delegation
+		// This allows external-dns to process DNSEndpoint resources created by
+		// the control-plane-operator for NS record delegation to hosted clusters
+		deployment.Spec.Template.Spec.Containers[0].Args = append(
+			deployment.Spec.Template.Spec.Containers[0].Args,
+			"--source=crd",
+			// Enable NS record management for zone delegation (required opt-in)
+			// External-dns only manages A, AAAA, CNAME by default
+			"--managed-record-types=A",
+			"--managed-record-types=AAAA",
+			"--managed-record-types=CNAME",
+			"--managed-record-types=NS",
+		)
 		if len(o.GoogleProject) > 0 {
 			deployment.Spec.Template.Spec.Containers[0].Args = append(
 				deployment.Spec.Template.Spec.Containers[0].Args,
@@ -960,6 +973,18 @@ func (o ExternalDNSClusterRole) Build() *rbacv1.ClusterRole {
 				},
 				Verbs: []string{"get", "list", "watch"},
 			},
+			// GCP-386: Allow external-dns to read/update DNSEndpoint resources for ingress zone delegation
+			// Matches: https://github.com/openshift/external-dns/blob/master/charts/external-dns/templates/clusterrole.yaml
+			{
+				APIGroups: []string{"externaldns.k8s.io"},
+				Resources: []string{"dnsendpoints"},
+				Verbs:     []string{"get", "watch", "list"},
+			},
+			{
+				APIGroups: []string{"externaldns.k8s.io"},
+				Resources: []string{"dnsendpoints/status"},
+				Verbs:     []string{rbacv1.VerbAll},
+			},
 		},
 	}
 	return role
@@ -1324,6 +1349,13 @@ func (o HyperShiftOperatorClusterRole) Build() *rbacv1.ClusterRole {
 				APIGroups: []string{"autoscaling.k8s.io"},
 				Resources: []string{"verticalpodautoscalers"},
 				Verbs:     []string{rbacv1.VerbAll},
+			},
+			// This allows hypershift operator to grant RBAC permissions for DNSEndpoints to the control-plane-operator.
+			// Required for GCP ingress zone delegation feature.
+			{
+				APIGroups: []string{"externaldns.k8s.io"},
+				Resources: []string{"dnsendpoints"},
+				Verbs:     []string{"create", "get", "update", "delete"},
 			},
 		},
 	}
