@@ -398,7 +398,7 @@ func (r *GCPPrivateServiceConnectReconciler) cleanupDNS(ctx context.Context, gcp
 		dnsEndpoint := &unstructured.Unstructured{}
 		dnsEndpoint.SetAPIVersion("externaldns.k8s.io/v1alpha1")
 		dnsEndpoint.SetKind("DNSEndpoint")
-		dnsEndpoint.SetName(hcp.Name + "-ingress-delegation")
+		dnsEndpoint.SetName(dnsEndpointName(hcp.Name))
 		dnsEndpoint.SetNamespace(hcp.Namespace)
 
 		if err := r.Client.Delete(ctx, dnsEndpoint); err != nil && !apierrors.IsNotFound(err) {
@@ -973,6 +973,28 @@ func InitCustomerGCPClient(ctx context.Context) (*compute.Service, error) {
 	return computeService, nil
 }
 
+// dnsEndpointName returns the name to use for DNSEndpoint resources associated with an HCP.
+func dnsEndpointName(hcpName string) string {
+	return hcpName + "-ingress-delegation"
+}
+
+// trimDNSName removes a trailing dot from a DNS name if present.
+// DNSEndpoint spec doesn't use trailing dots.
+func trimDNSName(dnsName string) string {
+	return strings.TrimSuffix(dnsName, ".")
+}
+
+// trimNameservers strips trailing dots from a list of nameservers.
+// GCP Cloud DNS returns nameservers like "ns-cloud-c1.googledomains.com." but external-dns
+// validation rejects targets ending with dots.
+func trimNameservers(nameservers []string) []string {
+	result := make([]string, len(nameservers))
+	for i, ns := range nameservers {
+		result[i] = strings.TrimSuffix(ns, ".")
+	}
+	return result
+}
+
 // reconcileDNSEndpoint creates or updates a DNSEndpoint resource for NS delegation
 // from the region DNS zone to the customer project's public ingress zone.
 //
@@ -986,19 +1008,8 @@ func (r *GCPPrivateServiceConnectReconciler) reconcileDNSEndpoint(
 ) error {
 	log := ctrl.LoggerFrom(ctx)
 
-	// Remove trailing dot from DNS name if present (DNSEndpoint spec doesn't use it)
-	dnsName := ingressDNSName
-	if len(dnsName) > 0 && dnsName[len(dnsName)-1] == '.' {
-		dnsName = dnsName[:len(dnsName)-1]
-	}
-
-	// Strip trailing dots from nameservers - external-dns validation rejects targets ending with dots
-	// GCP Cloud DNS returns nameservers like "ns-cloud-c1.googledomains.com." but external-dns
-	// expects them without trailing dots when creating DNSEndpoint targets
-	nsTargets := make([]string, len(nameservers))
-	for i, ns := range nameservers {
-		nsTargets[i] = strings.TrimSuffix(ns, ".")
-	}
+	dnsName := trimDNSName(ingressDNSName)
+	nsTargets := trimNameservers(nameservers)
 
 	// Create DNSEndpoint as an unstructured object
 	dnsEndpoint := &unstructured.Unstructured{
@@ -1006,7 +1017,7 @@ func (r *GCPPrivateServiceConnectReconciler) reconcileDNSEndpoint(
 			"apiVersion": "externaldns.k8s.io/v1alpha1",
 			"kind":       "DNSEndpoint",
 			"metadata": map[string]interface{}{
-				"name":      hcp.Name + "-ingress-delegation",
+				"name":      dnsEndpointName(hcp.Name),
 				"namespace": hcp.Namespace,
 			},
 			"spec": map[string]interface{}{
