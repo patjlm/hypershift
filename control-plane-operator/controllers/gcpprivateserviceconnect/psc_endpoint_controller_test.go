@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	hyperv1 "github.com/openshift/hypershift/api/hypershift/v1beta1"
+	"github.com/openshift/hypershift/support/upsert"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -851,7 +852,10 @@ func TestReconcileDNSEndpoint(t *testing.T) {
 			}
 
 			fakeClient := clientBuilder.Build()
-			reconciler := &GCPPrivateServiceConnectReconciler{Client: fakeClient}
+			reconciler := &GCPPrivateServiceConnectReconciler{
+				Client:                fakeClient,
+				CreateOrUpdateProvider: upsert.New(false),
+			}
 
 			err := reconciler.reconcileDNSEndpoint(context.Background(), tt.hcp, tt.ingressDNS, tt.nameservers)
 			require.NoError(t, err)

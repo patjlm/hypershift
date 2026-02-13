@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/client-go/util/workqueue"
@@ -55,6 +56,12 @@ const (
 	// out-of-band changes to GCP resources. Matches the AWS private link controller pattern.
 	driftDetectionRequeueInterval = 5 * time.Minute
 )
+
+var dnsEndpointGVK = schema.GroupVersionKind{
+	Group:   "externaldns.k8s.io",
+	Version: "v1alpha1",
+	Kind:    "DNSEndpoint",
+}
 
 // isWIFTokenAccessible checks if the WIF service account token file exists and is accessible.
 // The token is written by the token minter after the credential secret is created.
@@ -1011,65 +1018,38 @@ func (r *GCPPrivateServiceConnectReconciler) reconcileDNSEndpoint(
 	dnsName := trimDNSName(ingressDNSName)
 	nsTargets := trimNameservers(nameservers)
 
-	// Create DNSEndpoint as an unstructured object
-	dnsEndpoint := &unstructured.Unstructured{
-		Object: map[string]interface{}{
-			"apiVersion": "externaldns.k8s.io/v1alpha1",
-			"kind":       "DNSEndpoint",
-			"metadata": map[string]interface{}{
-				"name":      dnsEndpointName(hcp.Name),
-				"namespace": hcp.Namespace,
-			},
-			"spec": map[string]interface{}{
-				"endpoints": []interface{}{
-					map[string]interface{}{
-						"dnsName":    dnsName,
-						"recordType": "NS",
-						"targets":    nsTargets,
-						"recordTTL":  300,
-					},
+	dnsEndpoint := &unstructured.Unstructured{}
+	dnsEndpoint.SetGroupVersionKind(dnsEndpointGVK)
+	dnsEndpoint.SetName(dnsEndpointName(hcp.Name))
+	dnsEndpoint.SetNamespace(hcp.Namespace)
+
+	result, err := r.CreateOrUpdate(ctx, r, dnsEndpoint, func() error {
+		if err := controllerutil.SetControllerReference(hcp, dnsEndpoint, r.Scheme()); err != nil {
+			return fmt.Errorf("failed to set controller reference on DNSEndpoint: %w", err)
+		}
+		dnsEndpoint.Object["spec"] = map[string]interface{}{
+			"endpoints": []interface{}{
+				map[string]interface{}{
+					"dnsName":    dnsName,
+					"recordType": "NS",
+					"targets":    nsTargets,
+					"recordTTL":  int64(300),
 				},
 			},
-		},
-	}
-
-	// Set owner reference to HCP for garbage collection
-	if err := controllerutil.SetControllerReference(hcp, dnsEndpoint, r.Scheme()); err != nil {
-		return fmt.Errorf("failed to set controller reference on DNSEndpoint: %w", err)
-	}
-
-	// Create or update the DNSEndpoint
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(dnsEndpoint.GroupVersionKind())
-	err := r.Client.Get(ctx, client.ObjectKeyFromObject(dnsEndpoint), existing)
-
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			// Create new DNSEndpoint
-			log.Info("Creating new DNSEndpoint",
-				"name", dnsEndpoint.GetName(),
-				"namespace", dnsEndpoint.GetNamespace(),
-				"dnsName", dnsName,
-				"nameservers", nameservers)
-
-			if err := r.Client.Create(ctx, dnsEndpoint); err != nil {
-				return fmt.Errorf("failed to create DNSEndpoint: %w", err)
-			}
-			return nil
 		}
-		return fmt.Errorf("failed to get DNSEndpoint: %w", err)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("failed to reconcile DNSEndpoint: %w", err)
 	}
 
-	// Update existing DNSEndpoint
-	log.Info("Updating existing DNSEndpoint",
-		"name", dnsEndpoint.GetName(),
-		"namespace", dnsEndpoint.GetNamespace(),
-		"dnsName", dnsName,
-		"nameservers", nameservers)
-
-	dnsEndpoint.SetResourceVersion(existing.GetResourceVersion())
-	if err := r.Client.Update(ctx, dnsEndpoint); err != nil {
-		return fmt.Errorf("failed to update DNSEndpoint: %w", err)
+	if result != controllerutil.OperationResultNone {
+		log.Info("Reconciled DNSEndpoint",
+			"result", result,
+			"name", dnsEndpoint.GetName(),
+			"namespace", dnsEndpoint.GetNamespace(),
+			"dnsName", dnsName,
+			"nameservers", nameservers)
 	}
 
 	return nil
